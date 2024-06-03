@@ -18,7 +18,7 @@ import argparse
 def read_file(file_path):
     lines = []
     with open(file_path, 'r') as f:
-        lines = f.readlines()
+        lines = f.read().splitlines() #lines = f.readlines()
     return lines
 
 def get_conflicted_sections(lines):
@@ -51,6 +51,8 @@ def apply_diff(conflicted_section_lines, diff_lines):
         _line = None
         if line.startswith('+'):
             _line = line[1:].strip('\n')
+        elif line.startswith('-'):
+            pass
         else:
             _line = line.strip('\n')
         if _line!=None:
@@ -58,16 +60,48 @@ def apply_diff(conflicted_section_lines, diff_lines):
 
     return resolved_lines
 
+def clean_up_resolution_diff(resolution_diff_lines, merge_conflict_lines, conflicted_sections, margin=50):
+    if conflicted_sections:
+        for conflict_start, conflict_end in conflicted_sections:
+            start_pos = max(0, conflict_start-margin)
+            end_pos = min(len(merge_conflict_lines), conflict_end+margin)
 
+            # for front
+            last_found = None
+            for d in range(0, len(resolution_diff_lines)):
+                diff_start_line = resolution_diff_lines[d].strip()
+                for i in range(start_pos, conflict_start):
+                    if merge_conflict_lines[i].strip() == diff_start_line:
+                        last_found = d
+                        start_pos = i
+                if last_found == None:
+                    break
+            if last_found!=None:
+                resolution_diff_lines = resolution_diff_lines[last_found:]
 
+            # for last
+            last_found = None
+            for d in range(0, len(resolution_diff_lines)):
+                diff_start_line = resolution_diff_lines[d].strip()
+                for i in range(conflict_end, end_pos):
+                    if merge_conflict_lines[i].strip() == diff_start_line:
+                        last_found = d
+                        break
+                if last_found!=None:
+                    break
+            if last_found!=None:
+                resolution_diff_lines = resolution_diff_lines[:last_found]
+
+    return resolution_diff_lines
 
 def solve_merge_conflict(merge_conflict_file, resolution_diff_file):
     resolved_lines = []
 
     merge_conflict_lines = read_file(merge_conflict_file)
-    resolution_diff_lines = read_file(resolution_diff_file)
-
     conflicted_sections = get_conflicted_sections(merge_conflict_lines)
+
+    resolution_diff_lines = read_file(resolution_diff_file)
+    resolution_diff_lines = clean_up_resolution_diff(resolution_diff_lines, merge_conflict_lines, conflicted_sections)
 
     if conflicted_sections:
         length_conflict_lines = len(merge_conflict_lines)
@@ -106,7 +140,7 @@ if __name__ == "__main__":
 
     resolved_lines = solve_merge_conflict(args.merge_conflict_file, args.resolution_diff_file)
     if args.output:
-        with open(merge_conflict_file, 'w') as f:
+        with open(args.output, 'w') as f:
             f.writelines(line + '\n' for line in resolved_lines)
     else:
         for line in resolved_lines:
