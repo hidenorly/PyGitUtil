@@ -77,6 +77,7 @@ def clean_up_resolution_diff(resolution_diff_lines, merge_conflict_lines, confli
                 if last_found == None:
                     break
             if last_found!=None:
+                last_found = min(len(resolution_diff_lines), last_found+1)
                 resolution_diff_lines = resolution_diff_lines[last_found:]
 
             # for last
