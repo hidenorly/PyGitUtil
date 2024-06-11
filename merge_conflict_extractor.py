@@ -17,20 +17,45 @@ import subprocess
 import re
 
 def get_commit_id(patch_path):
+    result = None
     with open(patch_path, 'r', encoding='utf-8') as f:
         for line in f:
             if line.startswith('From '):
-                return line.split()[1]
-    raise ValueError(f'Could not find commit ID in {patch_path}')
-
-def apply_patch(patch_path, repo_path):
-    result = subprocess.run(['git', 'am', '-3', patch_path], cwd=repo_path, capture_output=True, text=True)
+                result=line.split()[1].strip()
+                break
     return result
 
+def apply_patch(patch_path, repo_path):
+    result = None
+    try:
+        result = subprocess.run(['git', 'am', '-3', patch_path], cwd=repo_path, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        print("timeout. git am -3 {patch_path}")
+        abort_patch(repo_path)
+    if not result or (result and result.returncode):
+        try:
+            result = subprocess.run(['git', 'apply', '--3way', patch_path], cwd=repo_path, capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            print("timeout. git apply --3way {patch_path}")
+            abort_patch(repo_path)
+    return result
+
+def abort_patch(repo_path):
+    subprocess.run(['git', 'am', '--abort'], cwd=repo_path, capture_output=True, text=True)
+    subprocess.run(['git', 'reset', '--hard'], cwd=repo_path, capture_output=True, text=True)
+
 def get_conflict_files(result):
-    if 'Applying' in result.stdout and 'Conflicts' in result.stdout:
-        return re.findall(r'Conflicts:\n\t(.*?)\n', result.stdout)
-    return []
+    conflicted_files = []
+    if result:
+        for line in result.stdout.split("\n"):
+            line = line.strip()
+            if line.startswith("CONFLICT (content): Merge conflict in "):
+                pos = line.rfind(" ")
+                if pos!=None:
+                    filename = line[pos+1:]
+                    if filename:
+                        conflicted_files.append(filename)
+    return conflicted_files
 
 def get_start_end_position_with_margin_without_another_merge_conflict_section(content, conflict_start, conflict_end, margin_lines):
     conflict_start = max(0, conflict_start-margin_lines)
@@ -110,32 +135,33 @@ def output_conflict(output_path, conflict_file, conflict_sections, resolved_cont
             f.write(resolved_content)
             f.write("\n```\n")
 
-def abort_patch(repo_path):
-    subprocess.run(['git', 'am', '--abort'], cwd=repo_path)
-
 def main(repo_path, patch_dir, output_dir, margin_lines, resolved_repo):
     patch_files = [os.path.join(patch_dir, f) for f in os.listdir(patch_dir) if f.endswith('.patch')]
+    patch_files = sorted(patch_files)
 
     for patch_file in patch_files:
         patch_filename = os.path.basename(patch_file)
-        try:
-            commit_id = get_commit_id(patch_file)
-        except ValueError as e:
-            print(f'Error: {e}')
-            continue
-        result = apply_patch(patch_file, repo_path)
-        conflict_files = get_conflict_files(result)
+        commit_id = get_commit_id(patch_file)
+        if commit_id:
+            print(f'{commit_id} : {patch_file}...')
+            result = apply_patch(patch_file, repo_path)
+            if result and result.returncode:
+                print(result.stderr)
+            conflict_files = get_conflict_files(result)
+            if conflict_files:
+                print(f'conflicted files:{conflict_files}')
 
-        if conflict_files:
-            output_filename = f"{commit_id}-{patch_filename.replace('.patch', '')}.conflict"
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.close()
+            if conflict_files:
+                output_filename = f"{commit_id}-{patch_filename.replace('.patch', '')}.conflict"
+                with open(output_filename, 'w', encoding='utf-8') as f:
+                    f.close()
 
-            for conflict_file in conflict_files:
-                output_path = os.path.join(output_dir, output_filename)
-                conflict_sections = get_conflict_sections(conflict_file, repo_path, margin_lines)
-                resolved_contents = get_resolved_contents(conflict_file, repo_path, resolved_repo, conflict_sections)
-                output_conflict(output_path, conflict_file, conflict_sections, resolved_contents)
+                for conflict_file in conflict_files:
+                    print(output_filename)
+                    output_path = os.path.join(output_dir, output_filename)
+                    conflict_sections = get_conflict_sections(conflict_file, repo_path, margin_lines)
+                    resolved_contents = get_resolved_contents(conflict_file, repo_path, resolved_repo, conflict_sections)
+                    output_conflict(output_path, conflict_file, conflict_sections, resolved_contents)
 
             abort_patch(repo_path)
 
